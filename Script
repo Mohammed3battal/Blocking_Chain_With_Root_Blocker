@@ -1,0 +1,62 @@
+;WITH BlockingCTE AS (
+    SELECT 
+        req.session_id,
+        req.blocking_session_id,
+        CAST(NULL AS INT) AS root_blocker_session_id,
+        ses.host_name,
+        DB_NAME(req.database_id) AS DB_Name,
+        ses.login_name,
+        req.status,
+        req.command,
+        req.start_time,
+        req.cpu_time,
+        DATEDIFF(SECOND, req.start_time, CURRENT_TIMESTAMP) AS total_elapsed_time,
+        req.wait_type,
+        sqltext.text AS QueryText
+    FROM 
+        sys.dm_exec_requests req
+    CROSS APPLY 
+        sys.dm_exec_sql_text(req.sql_handle) AS sqltext
+    JOIN 
+        sys.dm_exec_sessions ses ON ses.session_id = req.session_id
+    WHERE 
+        req.wait_type IS NOT NULL
+        AND DB_NAME(req.database_id) NOT IN ('master', 'msdb', 'tempdb', 'model')
+),
+RootBlockers AS (
+    SELECT 
+        session_id,
+        session_id AS root_blocker_session_id
+    FROM 
+        BlockingCTE
+    WHERE 
+        blocking_session_id = 0 
+    UNION ALL
+    SELECT 
+        b.session_id,
+        r.root_blocker_session_id
+    FROM 
+        BlockingCTE b
+    JOIN 
+        RootBlockers r ON b.blocking_session_id = r.session_id
+)
+SELECT 
+    b.session_id,
+    b.blocking_session_id,
+    r.root_blocker_session_id,
+    b.host_name,
+    b.DB_Name,
+    b.login_name,
+    b.status,
+    b.command,
+    b.start_time,
+    b.cpu_time,
+    b.total_elapsed_time,
+    b.wait_type,
+    b.QueryText
+FROM 
+    BlockingCTE b
+LEFT JOIN 
+    RootBlockers r ON b.session_id = r.session_id
+ORDER BY 
+    r.root_blocker_session_id, b.start_time;
